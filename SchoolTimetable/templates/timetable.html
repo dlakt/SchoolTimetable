@@ -1,0 +1,52 @@
+
+{% extends "base.html" %}
+
+{% block title %}Расписание - {{ class_info.name }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📅 Расписание {{ class_info.name }} класса</h2>
+    <p style="color: #666; margin-bottom: 20px;">
+        Всего уроков в неделю: <strong>{{ total_hours }}</strong>
+    </p>
+    
+    <div style="margin-bottom: 20px;">
+        <button class="btn btn-primary" onclick="window.print()">🖨️ Печать</button>
+        <button class="btn btn-primary" onclick="window.location.href='/'">🔙 Назад</button>
+    </div>
+    
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                <th style="padding: 12px; border: 1px solid #ddd;">Урок</th>
+                <th style="padding: 12px; border: 1px solid #ddd;">Пн</th>
+                <th style="padding: 12px; border: 1px solid #ddd;">Вт</th>
+                <th style="padding: 12px; border: 1px solid #ddd;">Ср</th>
+                <th style="padding: 12px; border: 1px solid #ddd;">Чт</th>
+                <th style="padding: 12px; border: 1px solid #ddd;">Пт</th>
+                <th style="padding: 12px; border: 1px solid #ddd;">Сб</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for lesson_num in range(6) %}
+            <tr>
+                <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; background: #f7fafc; text-align: center;">
+                    {{ lesson_num + 1 }}
+                </td>
+                {% for day in range(6) %}
+                <td style="padding: 10px; border: 1px solid #ddd;">
+                    {% if timetable and timetable[day] and timetable[day][lesson_num] %}
+                        <strong>{{ timetable[day][lesson_num].subject }}</strong><br>
+                        <small style="color: #666;">{{ timetable[day][lesson_num].teacher_name }}</small><br>
+                        <small style="color: #999;">{{ timetable[day][lesson_num].classroom }}</small>
+                    {% else %}
+                        <span style="color: #ccc;">—</span>
+                    {% endif %}
+                </td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

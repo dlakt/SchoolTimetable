@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Главная - Школьное расписание{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>📋 Составление расписания</h2>
+    <p style="color: #718096; margin-top: 10px;">
+        Выберите класс для генерации расписания или сгенерируйте для всех классов сразу.
+    </p>
+    
+    <div style="margin-top: 30px;">
+        <h3>Выберите класс:</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 20px;">
+            {% if classes %}
+                {% for class in classes %}
+                <button class="btn btn-primary" onclick="generateForClass('{{ class.id }}')">
+                    {{ class.name }} класс
+                </button>
+                {% endfor %}
+            {% else %}
+                <p>Нет данных о классах. Проверьте файл school_data.json</p>
+            {% endif %}
+        </div>
+        
+        <div style="margin-top: 30px; text-align: center;">
+            <button class="btn btn-success" onclick="generateForAll()" style="padding: 15px 40px; font-size: 18px;">
+                🚀 Сгенерировать для всех классов
+            </button>
+        </div>
+    </div>
+</div>
+
+<div id="results" style="margin-top: 20px;"></div>
+
+<script>
+    async function generateForClass(classId) {
+        showLoading();
+        
+        try {
+            const response = await fetch('/generate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ class_id: parseInt(classId) })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                showMessage('Расписание успешно сгенерировано!', 'success');
+                // Открываем расписание в новой вкладке
+                window.open(`/timetable/${classId}`, '_blank');
+            } else {
+                showMessage(`Ошибка: ${result.error || 'Неизвестная ошибка'}`, 'error');
+            }
+        } catch (error) {
+            showMessage(`Ошибка: ${error.message}`, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+    
+    async function generateForAll() {
+        showLoading();
+        
+        try {
+            const response = await fetch('/generate_all', {
+                method: 'POST'
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                showMessage('Расписания для всех классов успешно сгенерированы!', 'success');
+            } else {
+                showMessage(`Ошибка: ${result.error || 'Неизвестная ошибка'}`, 'error');
+            }
+        } catch (error) {
+            showMessage(`Ошибка: ${error.message}`, 'error');
+        } finally {
+            hideLoading();
+        }
+    }
+</script>
+{% endblock %}
