@@ -1,8 +1,8 @@
-
 from flask import Flask, render_template, request, jsonify
 import json
 import os
 import random
+from collections import defaultdict
 
 app = Flask(__name__)
 
@@ -11,9 +11,34 @@ def load_data():
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {'subjects_by_grade': {}, 'classrooms': []}
+    return {}
 
 data = load_data()
+
+# Настройки
+MAX_WINDOWS_PER_DAY = data.get('settings', {}).get('max_windows_per_day', 2)
+SATURDAY_LESSONS = data.get('settings', {}).get('saturday_lessons', 3)  # до какого урока
+SATURDAY_MAX = data.get('settings', {}).get('saturday_max_lessons', 2)  # максимум уроков в субботу
+
+# Строим словари
+subject_to_teacher = {}
+teacher_room = {}
+teacher_subjects = {}
+
+for teacher in data.get('teachers', []):
+    teacher_id = teacher['id']
+    teacher_room[teacher_id] = teacher.get('room', 'Кабинет')
+    teacher_subjects[teacher_id] = teacher.get('subjects', [])
+    for subject in teacher.get('subjects', []):
+        subject_to_teacher[subject] = teacher_id
+
+def get_teacher_for_subject(subject_name):
+    teacher_id = subject_to_teacher.get(subject_name)
+    if teacher_id:
+        for teacher in data.get('teachers', []):
+            if teacher['id'] == teacher_id:
+                return teacher
+    return None
 
 def get_teacher_name(teacher_id):
     for teacher in data.get('teachers', []):
@@ -21,177 +46,329 @@ def get_teacher_name(teacher_id):
             return teacher['name']
     return f"Учитель {teacher_id}"
 
-def get_classroom_for_subject(subject):
-    classrooms = data.get('classrooms', [])
-    subject_classroom = {
-        'Физика': 'physics', 'Химия': 'chemistry', 'Информатика': 'computer',
-        'Физкультура': 'sport', 'Математика': 'math', 'Алгебра': 'math', 'Геометрия': 'math'
-    }
-    required_type = subject_classroom.get(subject, 'regular')
-    for room in classrooms:
-        if room.get('type') == required_type:
-            return room.get('name', 'Кабинет')
-    for room in classrooms:
-        if room.get('type') == 'regular':
-            return room.get('name', 'Кабинет')
-    return "Кабинет"
-
-def generate_timetable_for_grade(grade):
-    grade_str = str(grade)
-    subjects = data.get('subjects_by_grade', {}).get(grade_str, [])
+def count_windows_in_day(day_timetable):
+    """Подсчитывает количество окон в одном дне"""
+    windows = 0
+    lessons = day_timetable
+    first_lesson = -1
+    last_lesson = -1
     
-    if not subjects:
-        return generate_test_timetable()
+    for i, lesson in enumerate(lessons):
+        if lesson is not None:
+            if first_lesson == -1:
+                first_lesson = i
+            last_lesson = i
+    
+    if first_lesson != -1:
+        for i in range(first_lesson, last_lesson + 1):
+            if lessons[i] is None:
+                windows += 1
+    
+    return windows
+
+def generate_timetable_for_class(class_id):
+    """Генерирует расписание для одного класса с ограничениями"""
+    
+    class_info = None
+    for c in data.get('classes', []):
+        if c['id'] == class_id:
+            class_info = c
+            break
+    
+    if not class_info:
+        return []
+    
+    grade = class_info['grade']
+    grade_str = str(grade)
+    subjects_data = data.get('subjects_by_grade', {}).get(grade_str, [])
+    
+    if not subjects_data:
+        return []
+    
+    days = data.get('settings', {}).get('days_per_week', 6)
+    lessons_per_day = data.get('settings', {}).get('lessons_per_day', 6)
+    
+    # Суббота: только 3 урока
+    saturday_limit = SATURDAY_LESSONS  # 3 урока (1-3)
+    saturday_max = SATURDAY_MAX  # максимум 2 урока в субботу
+    
+    timetable = [[None for _ in range(lessons_per_day)] for _ in range(days)]
     
     all_lessons = []
-    for subject in subjects:
-        for i in range(subject.get('hours', 0)):
+    for subject in subjects_data:
+        subject_name = subject['name']
+        hours = subject['hours']
+        teacher = get_teacher_for_subject(subject_name)
+        if not teacher:
+            continue
+        for _ in range(hours):
             all_lessons.append({
-                'name': subject.get('name', 'Урок'),
-                'teacher_id': subject.get('teacher_id', 1),
-                'teacher_name': get_teacher_name(subject.get('teacher_id', 1))
+                'name': subject_name,
+                'teacher_id': teacher['id'],
+                'teacher_name': teacher['name'],
+                'room': teacher.get('room', 'Кабинет')
             })
     
     random.shuffle(all_lessons)
-    days = 6
-    lessons_per_day = 6
-    
-    timetable = []
-    for day in range(days):
-        day_schedule = []
-        for lesson in range(lessons_per_day):
-            day_schedule.append(None)
-        timetable.append(day_schedule)
-    
     hard_subjects = ['Алгебра', 'Геометрия', 'Математика', 'Физика', 'Русский язык', 'Английский язык']
     
-    for subject in all_lessons:
-        if subject['name'] in hard_subjects:
+    # Сначала сложные предметы (только в первые 3 урока)
+    for lesson_data in all_lessons[:]:
+        if lesson_data['name'] in hard_subjects:
             placed = False
             for day in range(days):
+                if day == 5:  # Суббота
+                    continue  # В субботу сложные предметы не ставим
                 for lesson in range(3):
                     if timetable[day][lesson] is None:
-                        timetable[day][lesson] = {
-                            'subject': subject['name'],
-                            'teacher_name': subject['teacher_name'],
-                            'classroom': get_classroom_for_subject(subject['name'])
-                        }
+                        timetable[day][lesson] = lesson_data
+                        all_lessons.remove(lesson_data)
                         placed = True
                         break
                 if placed:
                     break
     
-    for subject in all_lessons:
-        if subject['name'] not in hard_subjects:
-            placed = False
-            for day in range(days):
-                for lesson in range(lessons_per_day):
-                    if timetable[day][lesson] is None:
-                        timetable[day][lesson] = {
-                            'subject': subject['name'],
-                            'teacher_name': subject['teacher_name'],
-                            'classroom': get_classroom_for_subject(subject['name'])
-                        }
-                        placed = True
-                        break
-                if placed:
-                    break
-    
-    return timetable
-
-def generate_test_timetable():
-    timetable = []
-    subjects = ['Математика', 'Русский язык', 'Литература', 'История', 'Английский', 'Физкультура']
-    teachers = ['Иванова М.А.', 'Петров С.В.', 'Сидорова Е.П.', 'Козлов Д.Н.', 'Новикова О.В.', 'Морозов И.А.']
-    classrooms = ['101', '102', '103', '104', '105', '201']
-    
-    for day in range(6):
-        day_schedule = []
-        for lesson in range(6):
-            if lesson < 5:
-                day_schedule.append({
-                    'subject': subjects[lesson % len(subjects)],
-                    'teacher_name': teachers[lesson % len(teachers)],
-                    'classroom': classrooms[lesson % len(classrooms)]
-                })
+    # Остальные предметы
+    for lesson_data in all_lessons[:]:
+        placed = False
+        day_order = list(range(days))
+        random.shuffle(day_order)
+        
+        for day in day_order:
+            # Суббота: только 1-3 уроки и не более 2 уроков
+            if day == 5:
+                # Проверяем, сколько уже уроков в субботу
+                saturday_count = sum(1 for l in range(saturday_limit) if timetable[5][l] is not None)
+                if saturday_count >= saturday_max:
+                    continue
+                # Суббота: только уроки 0-2 (1-3 уроки)
+                allowed_lessons = range(saturday_limit)
             else:
-                day_schedule.append(None)
-        timetable.append(day_schedule)
+                allowed_lessons = range(lessons_per_day)
+            
+            # Проверяем, не было ли такого же предмета вчера
+            same_subject_yesterday = False
+            if day > 0:
+                for lesson in range(lessons_per_day):
+                    if timetable[day-1][lesson] and timetable[day-1][lesson]['name'] == lesson_data['name']:
+                        same_subject_yesterday = True
+                        break
+            
+            if same_subject_yesterday:
+                continue
+            
+            lesson_order = list(allowed_lessons)
+            random.shuffle(lesson_order)
+            
+            for lesson in lesson_order:
+                if timetable[day][lesson] is None:
+                    if lesson_data['name'] == 'Физкультура' and lesson == 0:
+                        continue
+                    if lesson_data['name'] in hard_subjects and lesson == lessons_per_day - 1:
+                        continue
+                    
+                    # Проверяем, не будет ли больше 2 окон в этом дне
+                    test_timetable = timetable[day].copy()
+                    test_timetable[lesson] = lesson_data
+                    if count_windows_in_day(test_timetable) > MAX_WINDOWS_PER_DAY:
+                        continue
+                    
+                    timetable[day][lesson] = lesson_data
+                    all_lessons.remove(lesson_data)
+                    placed = True
+                    break
+            if placed:
+                break
+    
+    # Если остались нераспределенные уроки
+    for lesson_data in all_lessons:
+        for day in range(days):
+            if day == 5:
+                saturday_count = sum(1 for l in range(saturday_limit) if timetable[5][l] is not None)
+                if saturday_count >= saturday_max:
+                    continue
+                allowed_lessons = range(saturday_limit)
+            else:
+                allowed_lessons = range(lessons_per_day)
+            
+            for lesson in allowed_lessons:
+                if timetable[day][lesson] is None:
+                    # Проверяем окна
+                    test_timetable = timetable[day].copy()
+                    test_timetable[lesson] = lesson_data
+                    if count_windows_in_day(test_timetable) > MAX_WINDOWS_PER_DAY:
+                        continue
+                    timetable[day][lesson] = lesson_data
+                    break
+            if timetable[day][lesson] == lesson_data:
+                break
+    
     return timetable
 
-def get_total_hours(grade):
-    grade_str = str(grade)
-    subjects = data.get('subjects_by_grade', {}).get(grade_str, [])
-    total = sum(s.get('hours', 0) for s in subjects)
-    return total if total > 0 else 30
+def calculate_quality(timetable):
+    if not timetable:
+        return {'score': 0, 'total_lessons': 0, 'windows': 0, 'days_with_windows': 0, 
+                'hard_in_morning': 0, 'total_hard': 0, 'level': 'Нет данных'}
+    
+    days = len(timetable)
+    lessons_per_day = len(timetable[0]) if days > 0 else 0
+    hard_subjects = ['Алгебра', 'Геометрия', 'Математика', 'Физика', 'Русский язык', 'Английский язык']
+    
+    total_lessons = 0
+    windows = 0
+    hard_in_morning = 0
+    total_hard = 0
+    days_with_windows = 0
+    consecutive_duplicates = 0
+    
+    for day in range(days):
+        day_lessons = []
+        prev_subject = None
+        day_windows = 0
+        
+        for lesson in range(lessons_per_day):
+            if timetable[day][lesson] is not None:
+                total_lessons += 1
+                day_lessons.append(True)
+                subject = timetable[day][lesson].get('name', '')
+                if subject in hard_subjects:
+                    total_hard += 1
+                    if lesson < 3:
+                        hard_in_morning += 1
+                if prev_subject == subject:
+                    consecutive_duplicates += 1
+                prev_subject = subject
+            else:
+                day_lessons.append(False)
+                prev_subject = None
+        
+        first_lesson = -1
+        last_lesson = -1
+        for i, has_lesson in enumerate(day_lessons):
+            if has_lesson:
+                if first_lesson == -1:
+                    first_lesson = i
+                last_lesson = i
+        
+        if first_lesson != -1:
+            for i in range(first_lesson, last_lesson + 1):
+                if not day_lessons[i]:
+                    day_windows += 1
+                    windows += 1
+            if day_windows > 0:
+                days_with_windows += 1
+    
+    quality_score = 100
+    quality_score -= min(40, windows * 8)
+    quality_score -= days_with_windows * 3
+    if total_hard > 0:
+        morning_ratio = hard_in_morning / total_hard
+        quality_score += morning_ratio * 20
+    quality_score -= consecutive_duplicates * 5
+    
+    empty_days = 0
+    for day in range(days):
+        empty = all(timetable[day][lesson] is None for lesson in range(lessons_per_day))
+        if empty:
+            empty_days += 1
+    quality_score -= empty_days * 15
+    
+    # Бонус за соблюдение ограничений
+    if windows <= MAX_WINDOWS_PER_DAY * days:
+        quality_score += 5
+    
+    quality_score = max(0, min(100, quality_score))
+    
+    return {
+        'score': round(quality_score),
+        'total_lessons': total_lessons,
+        'windows': windows,
+        'days_with_windows': days_with_windows,
+        'hard_in_morning': hard_in_morning,
+        'total_hard': total_hard,
+        'consecutive_duplicates': consecutive_duplicates,
+        'level': 'Отлично' if quality_score >= 80 else 'Хорошо' if quality_score >= 60 else 'Средне' if quality_score >= 40 else 'Требует улучшения'
+    }
 
-# ВАЖНО: Классы объявлены ГЛОБАЛЬНО и доступны
-CLASSES_LIST = [
-    {'id': 1, 'name': '5А класс', 'grade': 5},
-    {'id': 2, 'name': '5Б класс', 'grade': 5},
-    {'id': 3, 'name': '6А класс', 'grade': 6},
-    {'id': 4, 'name': '6Б класс', 'grade': 6},
-    {'id': 5, 'name': '7А класс', 'grade': 7},
-    {'id': 6, 'name': '7Б класс', 'grade': 7},
-    {'id': 7, 'name': '8А класс', 'grade': 8},
-    {'id': 8, 'name': '8Б класс', 'grade': 8},
-    {'id': 9, 'name': '9А класс', 'grade': 9},
-    {'id': 10, 'name': '9Б класс', 'grade': 9}
-]
+# Генерация расписаний для всех классов
+def generate_all_timetables():
+    all_timetables = {}
+    all_quality = {}
+    
+    for class_info in data.get('classes', []):
+        class_id = class_info['id']
+        timetable = generate_timetable_for_class(class_id)
+        quality = calculate_quality(timetable)
+        total_hours = sum(s.get('hours', 0) for s in data.get('subjects_by_grade', {}).get(str(class_info['grade']), []))
+        
+        all_timetables[class_id] = {
+            'timetable': timetable,
+            'quality': quality,
+            'total_hours': total_hours,
+            'class_info': class_info
+        }
+    
+    return all_timetables
+
+print("⏳ Генерация расписаний для всех классов...")
+print(f"📌 Ограничения: максимум {MAX_WINDOWS_PER_DAY} окна в день, суббота - до {SATURDAY_LESSONS} урока, не более {SATURDAY_MAX} уроков")
+
+ALL_TIMETABLES = generate_all_timetables()
+print(f"✅ Готово! Сгенерировано расписаний: {len(ALL_TIMETABLES)}")
+
+avg_quality = 0
+for class_id, data_item in ALL_TIMETABLES.items():
+    avg_quality += data_item['quality']['score']
+if len(ALL_TIMETABLES) > 0:
+    avg_quality /= len(ALL_TIMETABLES)
+print(f"📊 Среднее качество: {avg_quality:.1f}%")
+
+CLASSES_LIST = data.get('classes', [])
 
 @app.route('/')
 def index():
-    print(f"Отправляем классы: {CLASSES_LIST}")
     return render_template('index.html', classes=CLASSES_LIST)
 
 @app.route('/generate', methods=['POST'])
 def generate():
     try:
         req_data = request.get_json()
-        print(f"Получен запрос: {req_data}")
-        
         class_id = req_data.get('class_id')
-        # Преобразуем в число, если пришло строкой
         if isinstance(class_id, str):
             class_id = int(class_id)
         
-        print(f"Ищем класс с ID: {class_id} (тип: {type(class_id)})")
-        
-        # Поиск класса
-        class_info = None
-        for c in CLASSES_LIST:
-            if c['id'] == class_id:
-                class_info = c
-                break
-        
-        if not class_info:
-            print(f"КЛАСС НЕ НАЙДЕН! ID={class_id}")
-            return jsonify({'success': False, 'error': f'Класс с ID {class_id} не найден'})
-        
-        print(f"Найден класс: {class_info}")
-        
-        timetable = generate_timetable_for_grade(class_info['grade'])
-        total_hours = get_total_hours(class_info['grade'])
-        
-        return jsonify({
-            'success': True,
-            'timetable': timetable,
-            'total_hours': total_hours
-        })
+        if class_id in ALL_TIMETABLES:
+            result = ALL_TIMETABLES[class_id]
+            return jsonify({
+                'success': True,
+                'timetable': result['timetable'],
+                'total_hours': result['total_hours'],
+                'quality': result['quality'],
+                'class_info': result['class_info']
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Класс не найден'})
     except Exception as e:
-        print(f"Ошибка: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/generate_all', methods=['POST'])
 def generate_all():
-    return jsonify({'success': True})
+    try:
+        results = {}
+        for class_id, data_item in ALL_TIMETABLES.items():
+            results[class_id] = {
+                'class_name': data_item['class_info']['name'],
+                'total_hours': data_item['total_hours'],
+                'quality_score': data_item['quality']['score'],
+                'quality_level': data_item['quality']['level'],
+                'windows': data_item['quality']['windows']
+            }
+        return jsonify({'success': True, 'results': results})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/timetable/<int:class_id>')
 def timetable_page(class_id):
-    print(f"Запрос страницы расписания для класса {class_id}")
-    
     class_info = None
     for c in CLASSES_LIST:
         if c['id'] == class_id:
@@ -201,25 +378,33 @@ def timetable_page(class_id):
     if not class_info:
         return f"Класс с ID {class_id} не найден", 404
     
-    timetable = generate_timetable_for_grade(class_info['grade'])
-    total_hours = get_total_hours(class_info['grade'])
+    result = ALL_TIMETABLES.get(class_id)
+    if not result:
+        return "Расписание не сгенерировано", 404
     
     return render_template('timetable.html', 
-                         timetable=timetable, 
-                         class_info=class_info,
-                         total_hours=total_hours)
+                         timetable=result['timetable'], 
+                         class_info=result['class_info'],
+                         total_hours=result['total_hours'],
+                         quality=result['quality'])
 
 @app.route('/help')
 def help_page():
     return render_template('help.html')
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("Школьное расписание")
-    print("=" * 50)
-    print("Доступные классы:")
-    for c in CLASSES_LIST:
-        print(f"  ID {c['id']}: {c['name']} ({c['grade']} класс)")
-    print("=" * 50)
-    print("Сервер запущен: http://127.0.0.1:5000")
+    print("=" * 60)
+    print("🏫 ШКОЛЬНОЕ РАСПИСАНИЕ (с ограничениями)")
+    print("=" * 60)
+    print(f"📌 Максимум окон в день: {MAX_WINDOWS_PER_DAY}")
+    print(f"📌 Суббота: только 1-{SATURDAY_LESSONS} уроки")
+    print(f"📌 Суббота: максимум {SATURDAY_MAX} урока")
+    print("\n📊 Результаты генерации:")
+    for class_id, data_item in ALL_TIMETABLES.items():
+        q = data_item['quality']
+        print(f"  {data_item['class_info']['name']}: {q['score']}% ({q['level']}) - {q['windows']} окон")
+    
+    print("\n" + "=" * 60)
+    print("Сервер: http://127.0.0.1:5000")
+    print("=" * 60)
     app.run(debug=True, port=5000)
