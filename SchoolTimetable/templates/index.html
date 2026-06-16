@@ -4,84 +4,107 @@
 
 {% block content %}
 <div class="card">
-    <h2>📋 Составление расписания</h2>
+    <h2>📋 Школьное расписание</h2>
     <p style="color: #718096; margin-top: 10px;">
-        Выберите класс для генерации расписания или сгенерируйте для всех классов сразу.
+        Выберите класс для просмотра расписания.
     </p>
     
     <div style="margin-top: 30px;">
         <h3>Выберите класс:</h3>
         <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 20px;">
-            {% if classes %}
-                {% for class in classes %}
-                <button class="btn btn-primary" onclick="generateForClass('{{ class.id }}')">
-                    {{ class.name }} класс
+            {% for class_item in classes %}
+                <button class="btn btn-primary" data-class-id="{{ class_item.id }}" onclick="viewTimetable(this)">
+                    {{ class_item.name }}
                 </button>
-                {% endfor %}
             {% else %}
                 <p>Нет данных о классах. Проверьте файл school_data.json</p>
-            {% endif %}
+            {% endfor %}
         </div>
-        
-        <div style="margin-top: 30px; text-align: center;">
-            <button class="btn btn-success" onclick="generateForAll()" style="padding: 15px 40px; font-size: 18px;">
-                🚀 Сгенерировать для всех классов
-            </button>
-        </div>
+    </div>
+    
+    <div style="margin-top: 30px; text-align: center;">
+        <button class="btn btn-success" onclick="viewAllInfo()" style="padding: 15px 40px; font-size: 18px;">
+            📊 Показать статистику всех классов
+        </button>
     </div>
 </div>
 
 <div id="results" style="margin-top: 20px;"></div>
 
 <script>
-    async function generateForClass(classId) {
+    function viewTimetable(button) {
+        var classId = button.getAttribute('data-class-id');
         showLoading();
         
-        try {
-            const response = await fetch('/generate', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ class_id: parseInt(classId) })
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                showMessage('Расписание успешно сгенерировано!', 'success');
-                // Открываем расписание в новой вкладке
-                window.open(`/timetable/${classId}`, '_blank');
-            } else {
-                showMessage(`Ошибка: ${result.error || 'Неизвестная ошибка'}`, 'error');
-            }
-        } catch (error) {
-            showMessage(`Ошибка: ${error.message}`, 'error');
-        } finally {
+        fetch('/generate', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ class_id: parseInt(classId) })
+        })
+        .then(function(response) {
+            return response.json();
+        })
+        .then(function(data) {
             hideLoading();
-        }
+            if (data.success) {
+                window.open('/timetable/' + classId, '_blank');
+            } else {
+                showMessage('Ошибка: ' + (data.error || 'Неизвестная ошибка'), 'error');
+            }
+        })
+        .catch(function(error) {
+            hideLoading();
+            showMessage('Ошибка: ' + error.message, 'error');
+        });
     }
     
-    async function generateForAll() {
+    function viewAllInfo() {
         showLoading();
         
-        try {
-            const response = await fetch('/generate_all', {
-                method: 'POST'
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                showMessage('Расписания для всех классов успешно сгенерированы!', 'success');
-            } else {
-                showMessage(`Ошибка: ${result.error || 'Неизвестная ошибка'}`, 'error');
-            }
-        } catch (error) {
-            showMessage(`Ошибка: ${error.message}`, 'error');
-        } finally {
+        fetch('/generate_all', {
+            method: 'POST'
+        })
+        .then(function(response) {
+            return response.json();
+        })
+        .then(function(data) {
             hideLoading();
-        }
+            if (data.success) {
+                var resultsDiv = document.getElementById('results');
+                var html = '<div class="card"><h3>📊 Статистика всех классов</h3><div style="margin-top: 15px;">';
+                html += '<table style="width:100%; border-collapse:collapse;">';
+                html += '<tr style="background:#667eea; color:white;">';
+                html += '<th style="padding:10px; border:1px solid #ddd;">Класс</th>';
+                html += '<th style="padding:10px; border:1px solid #ddd;">Уроков</th>';
+                html += '<th style="padding:10px; border:1px solid #ddd;">Качество</th>';
+                html += '<th style="padding:10px; border:1px solid #ddd;">Оценка</th>';
+                html += '</tr>';
+                
+                for (var classId in data.results) {
+                    var r = data.results[classId];
+                    var color = '#48bb78';
+                    if (r.quality_score < 60) color = '#fc8181';
+                    else if (r.quality_score < 80) color = '#ed8936';
+                    
+                    html += '<tr>';
+                    html += '<td style="padding:8px; border:1px solid #ddd;">' + r.class_name + '</td>';
+                    html += '<td style="padding:8px; border:1px solid #ddd; text-align:center;">' + r.total_hours + '</td>';
+                    html += '<td style="padding:8px; border:1px solid #ddd; text-align:center; color:' + color + '; font-weight:bold;">' + r.quality_score + '%</td>';
+                    html += '<td style="padding:8px; border:1px solid #ddd; text-align:center; color:' + color + ';">' + r.quality_level + '</td>';
+                    html += '</tr>';
+                }
+                html += '</table></div></div>';
+                resultsDiv.innerHTML = html;
+            } else {
+                showMessage('Ошибка: ' + (data.error || 'Неизвестная ошибка'), 'error');
+            }
+        })
+        .catch(function(error) {
+            hideLoading();
+            showMessage('Ошибка: ' + error.message, 'error');
+        });
     }
 </script>
 {% endblock %}
